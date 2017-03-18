@@ -44,7 +44,7 @@ public class WatchService extends Service implements SurfaceHolder.Callback, ITX
 
     private WindowManager mWindowManager;
     private View mPreviewContainer;
-    private SurfaceHolder mHolder;
+    private SurfaceHolder mSurfaceHolder;
     private int mHeight = 480;
     private int mWidth = 640;
 
@@ -55,20 +55,19 @@ public class WatchService extends Service implements SurfaceHolder.Callback, ITX
     @Override
     public void onCreate() {
         super.onCreate();
+        //关键类的创建，放在所有操作之前
+        mWindowManager = (WindowManager) getApplicationContext().getSystemService(WINDOW_SERVICE);
+        mLivePusher     = new TXLivePusher(getApplicationContext());
+        mLivePushConfig = new TXLivePushConfig();
     }
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         if(intent.getAction() != null && intent.getAction().equals("start_main")) {
-            mWindowManager = (WindowManager) getApplicationContext().getSystemService(WINDOW_SERVICE);
-            mPreviewContainer = View.inflate(this, R.layout.camera_container, null);
-            SurfaceView surfaceView = (SurfaceView) mPreviewContainer.findViewById(R.id.preview);
-            SurfaceHolder holder = surfaceView.getHolder();
-            holder.addCallback(this);
-            mWindowManager.addView(mPreviewContainer, getPreviewLayoutParams());
+            //添加preview窗口，在窗口创建回调中打开相机开启预览
+            initPreviewWindow();
 
-            mLivePusher     = new TXLivePusher(getApplicationContext());
-            mLivePushConfig = new TXLivePushConfig();
+            //初始化推流器并开始推流器
             startPublishRtmp();
         }else{
             stopSelf();
@@ -85,11 +84,55 @@ public class WatchService extends Service implements SurfaceHolder.Callback, ITX
     @Override
     public void onDestroy() {
         super.onDestroy();
+
         stopPublishRtmp();
+
+        stopPreviewAndReleaseCamera();
+
         mLivePusher = null;
         mLivePushConfig = null;
 
     }
+
+
+    private WindowManager.LayoutParams getPreviewLayoutParams(){
+        WindowManager.LayoutParams params = new WindowManager.LayoutParams();
+        params.type = WindowManager.LayoutParams.TYPE_SYSTEM_ALERT;
+        params.flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE;
+        params.gravity = Gravity.LEFT;
+        //悬浮窗起点坐标
+        params.x = 0;
+        params.y = 0;
+        //悬浮窗大小
+        params.width = 200;
+        params.height = 200;
+        return params;
+    }
+
+    /**
+     * 初始化预览窗口
+     */
+    private void initPreviewWindow() {
+        if(mPreviewContainer == null){
+            mPreviewContainer = View.inflate(this, R.layout.camera_container, null);
+            SurfaceView surfaceView = (SurfaceView) mPreviewContainer.findViewById(R.id.preview);
+            SurfaceHolder holder = surfaceView.getHolder();
+            holder.addCallback(this);
+            mWindowManager.addView(mPreviewContainer, getPreviewLayoutParams());
+        }
+    }
+
+    /**
+     * 移除预览窗口
+     */
+    private void removePreviewWindow(){
+        if(mPreviewContainer != null){
+            mWindowManager.removeView(mPreviewContainer);
+            mPreviewContainer = null;
+            mSurfaceHolder = null;
+        }
+    }
+
 
     /**
      * @param tagInfo
@@ -110,8 +153,16 @@ public class WatchService extends Service implements SurfaceHolder.Callback, ITX
         return cameraId;
     }
 
-    private boolean openCamera(int tagInfo) {
-        Log.d(TAG,  "openCamera");
+
+    /**
+     * 打开摄像头，并开启预览，在SurfaceHolder.Callback.onSurfaceCreated()回调中调用
+     *
+     * @param tagInfo 摄像头id
+     * @return
+     */
+    private boolean openCameraAndStartPreview(int tagInfo, SurfaceHolder holder) {
+        Log.d(TAG,  "openCameraAndStartPreview");
+        mSurfaceHolder = holder;
         // 尝试开启摄像头
         try {
             mCamera = Camera.open(getCameraId(tagInfo));
@@ -131,26 +182,20 @@ public class WatchService extends Service implements SurfaceHolder.Callback, ITX
                 Log.d(TAG, "摄像头" + tagInfo + "支持：" + si.get(i).width + "*" + si.get(i).height);
             }
 
-            mCamera.setPreviewDisplay(mHolder);
-
-            mCamera.setPreviewCallback(new Camera.PreviewCallback() {
-                @Override
-                public void onPreviewFrame(byte[] data, Camera camera) {
-                    Log.d(TAG, "back onPreviewFrame " + data);
-                    mLivePusher.sendCustomVideoData(data, TXLivePusher.YUV_420P, mWidth, mHeight);
-                }
-            });
+            mCamera.setPreviewDisplay(mSurfaceHolder);
+            mCamera.setPreviewCallback(mPreviewCallback);
             mCamera.startPreview();
+
         } catch (RuntimeException e) {
-            releaseCameraAndStopPreview();
+            stopPreviewAndReleaseCamera();
             Log.d(TAG,  e.getMessage());
             return false;
         } catch (IOException e){
-            releaseCameraAndStopPreview();
+            stopPreviewAndReleaseCamera();
             Log.d(TAG,  e.getMessage());
             return false;
         }
-        // 开启后置失败
+
         if (mCamera == null) {
             return false;
         }
@@ -158,14 +203,8 @@ public class WatchService extends Service implements SurfaceHolder.Callback, ITX
         return true;
     }
 
-    private void removePreviewWindow(){
-        if(mPreviewContainer != null){
-            mWindowManager.removeView(mPreviewContainer);
-        }
-    }
-
-    public synchronized boolean releaseCameraAndStopPreview() {
-        Log.d(TAG, "releaseCameraAndStopPreview----");
+    public synchronized void stopPreviewAndReleaseCamera() {
+        Log.d(TAG, "stopPreviewAndReleaseCamera----");
 
         if (mCamera != null) {
             isOpen = false;
@@ -178,41 +217,23 @@ public class WatchService extends Service implements SurfaceHolder.Callback, ITX
                 e.printStackTrace();
                 Log.d(TAG,  e.getMessage());
             }
-            removePreviewWindow();
-            return true;
-        } else {
-            removePreviewWindow();
-            return false;
         }
+        removePreviewWindow();
     }
 
-//    private void intiPreview(){
-//        View cameraContainer = View.inflate(this, R.layout.camera_container, null);
-//        SurfaceView surfaceView = (SurfaceView) cameraContainer.findViewById(R.id.preview);
-//        SurfaceHolder holder = surfaceView.getHolder();
-//        holder.addCallback(this);
-//        mWindowManager.addView(cameraContainer, getPreviewLayoutParams());
-//    }
-
-    private WindowManager.LayoutParams getPreviewLayoutParams(){
-        WindowManager.LayoutParams params = new WindowManager.LayoutParams();
-        params.type = WindowManager.LayoutParams.TYPE_SYSTEM_ALERT;
-        params.flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE;
-        params.gravity = Gravity.LEFT;
-        //悬浮窗起点坐标
-        params.x = 0;
-        params.y = 0;
-        //悬浮窗大小
-        params.width = 200;
-        params.height = 200;
-        return params;
-    }
+    private Camera.PreviewCallback mPreviewCallback =  new Camera.PreviewCallback() {
+        @Override
+        public void onPreviewFrame(byte[] data, Camera camera) {
+            Log.d(TAG, "back onPreviewFrame " + data);
+            mLivePusher.sendCustomVideoData(data, TXLivePusher.YUV_420P, mWidth, mHeight);
+        }
+    };
 
 
     private boolean startPublishRtmp(){
         int customModeType = 0;
 
-        //【示例代码1】设置自定义视频采集逻辑 （自定义视频采集逻辑不要调用startPreview）
+        //设置自定义视频采集逻辑 （自定义视频采集逻辑不要调用startPreview）
         customModeType |= CUSTOM_MODE_VIDEO_CAPTURE;
         customModeType |= CUSTOM_MODE_AUDIO_CAPTURE;
 
@@ -234,7 +255,6 @@ public class WatchService extends Service implements SurfaceHolder.Callback, ITX
 
         mVideoPublish = false;
 
-        releaseCameraAndStopPreview();
         if(mLivePusher != null){
             mLivePusher.setPushListener(null);
             mLivePusher.stopPusher();
@@ -249,8 +269,8 @@ public class WatchService extends Service implements SurfaceHolder.Callback, ITX
     public void surfaceCreated(SurfaceHolder surfaceHolder) {
         Log.d(TAG, "surfaceCreated");
 
-        mHolder = surfaceHolder;
-        openCamera(Camera.CameraInfo.CAMERA_FACING_BACK);
+        //打开摄像头开启预览
+        openCameraAndStartPreview(Camera.CameraInfo.CAMERA_FACING_BACK, surfaceHolder);
     }
 
     @Override
@@ -304,16 +324,15 @@ public class WatchService extends Service implements SurfaceHolder.Callback, ITX
     public void onNetStatus(Bundle status) {
         String str = getNetStatusString(status);
         Log.d(TAG, "net status, " + str);
-//        mLogViewStatus.setText(str);
         Log.d(TAG, "Current status, CPU:"+status.getString(TXLiveConstants.NET_STATUS_CPU_USAGE)+
                 ", RES:"+status.getInt(TXLiveConstants.NET_STATUS_VIDEO_WIDTH)+"*"+status.getInt(TXLiveConstants.NET_STATUS_VIDEO_HEIGHT)+
                 ", SPD:"+status.getInt(TXLiveConstants.NET_STATUS_NET_SPEED)+"Kbps"+
                 ", FPS:"+status.getInt(TXLiveConstants.NET_STATUS_VIDEO_FPS)+
                 ", ARA:"+status.getInt(TXLiveConstants.NET_STATUS_AUDIO_BITRATE)+"Kbps"+
                 ", VRA:"+status.getInt(TXLiveConstants.NET_STATUS_VIDEO_BITRATE)+"Kbps");
-//        if (mLivePusher != null){
-//            mLivePusher.onLogRecord("[net state]:\n"+str+"\n");
-//        }
+        if (mLivePusher != null){
+            mLivePusher.onLogRecord("[net state]:\n"+str+"\n");
+        }
     }
 
     //公用打印辅助函数

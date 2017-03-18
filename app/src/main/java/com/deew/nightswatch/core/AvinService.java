@@ -142,7 +142,7 @@ public class AvinService extends Service implements SurfaceHolder.Callback, ITXL
     }
 
     public synchronized boolean releaseCameraAndStopPreview() {
-        Log.d(TAG, "releaseCameraAndStopPreview----");
+        Log.d(TAG, "stopPreviewAndReleaseCamera----");
         if (mCamera != null) {
             isOpen = false;
             try {

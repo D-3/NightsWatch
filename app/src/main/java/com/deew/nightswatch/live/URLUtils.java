@@ -101,8 +101,8 @@ public class URLUtils {
     public static String getiImei(Context context){
 //        TelephonyManager telephonyManager=(TelephonyManager) context.getSystemService(Context.TELEPHONY_SERVICE);
 //        return  telephonyManager.getDeviceId();
-//        return "864221030200593";
-        return "301234567891202";
+        return "864221030200593";
+//        return "301234567891202";
     }
 
 }

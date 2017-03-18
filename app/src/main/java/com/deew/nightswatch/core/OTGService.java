@@ -81,13 +81,9 @@ public class OTGService extends Service implements ITXLivePushListener {
     public void onCreate() {
         super.onCreate();
         mContext = this;
-        //初始化WindowManager
+        //关键类的创建，放在所有操作之前
         mWindowManager = (WindowManager) getApplicationContext().getSystemService(WINDOW_SERVICE);
-
-        //初始化usb操作类，方便后续使用
         mUSBMonitor = new USBMonitor(this, mOnDeviceConnectListener);
-
-        //初始化Pusher和PushConfig，方便后续使用
         mLivePusher = new TXLivePusher(getApplicationContext());
         mLivePushConfig = new TXLivePushConfig();
     }
@@ -110,7 +106,14 @@ public class OTGService extends Service implements ITXLivePushListener {
 
     @Override
     public void onDestroy() {
+        //停止推流
         stopPublishRtmp();
+
+        //关闭预览，释放相机
+        stopPreviewAndReleaseCamera();
+
+        //移除预览窗口
+        removePreviewWindow();
 
         mLivePusher = null;
         mLivePushConfig = null;
@@ -206,6 +209,11 @@ public class OTGService extends Service implements ITXLivePushListener {
     };
 
 
+    /**
+     * 开始推流，在推流之前确保摄像头已经初始化并且开始预览
+     *
+     * @return 推流是否已开启
+     */
     private boolean startPublishRtmp() {
         Log.d(TAG, "startPublishRtmp");
 
@@ -213,7 +221,7 @@ public class OTGService extends Service implements ITXLivePushListener {
 
         int customModeType = 0;
 
-        //【示例代码1】设置自定义视频采集逻辑 （自定义视频采集逻辑不要调用startPreview）
+        //设置自定义视频采集逻辑 （自定义视频采集逻辑不要调用startPreview）
         customModeType |= CUSTOM_MODE_VIDEO_CAPTURE;
         customModeType |= CUSTOM_MODE_AUDIO_CAPTURE;
 
@@ -231,14 +239,20 @@ public class OTGService extends Service implements ITXLivePushListener {
         return true;
     }
 
+    /**
+     * 初始化摄像头
+     */
     private void initOtgCamera() {
         Log.d(TAG, "initOtgCamera");
         Log.d(TAG, "open bird otg and register usb monitor");
         mBirdIntelligentVehicle.BirdOpenOtg(getApplicationContext());
-        //监听usb
+        //监听usb, 有usb事件(设备连接，断开等)便会触发OnDeviceConnectListener回调
         mUSBMonitor.register();
     }
 
+    /**
+     * 初始化预览窗口
+     */
     private void initPreviewWindow() {
         Log.d(TAG, "initPreviewWindow");
         if (mPreviewContainer == null) {
@@ -249,6 +263,11 @@ public class OTGService extends Service implements ITXLivePushListener {
         }
     }
 
+    /**
+     * 打开摄像头并开始预览，应先确保预览窗口已经初始化
+     *
+     * @param ctrlBlock
+     */
     private void openCameraAndStartPreview(final USBMonitor.UsbControlBlock ctrlBlock) {
         Log.d(TAG, "openCameraAndStartPreview ");
         if (mUVCCamera != null) {
@@ -300,8 +319,9 @@ public class OTGService extends Service implements ITXLivePushListener {
                 }
                 if (mUVCCamera != null) {
                     final SurfaceTexture st = mUVCCameraView.getSurfaceTexture();
-                    if (st != null)
+                    if (st != null) {
                         mPreviewSurface = new Surface(st);
+                    }
                     mUVCCamera.setPreviewDisplay(mPreviewSurface);
                     mUVCCamera.setFrameCallback(mIFrameCallback, UVCCamera.PIXEL_FORMAT_NV21/*UVCCamera.PIXEL_FORMAT_RGB565, UVCCamera.PIXEL_FORMAT_NV21*/);
                     mUVCCamera.startPreview();
@@ -310,13 +330,12 @@ public class OTGService extends Service implements ITXLivePushListener {
         });
     }
 
+    /**
+     * 停止推流
+     */
     private void stopPublishRtmp() {
         Log.d(TAG, "stopPublishRtmp");
         mVideoPublish = false;
-        //先释放相机，停止预览
-        releaseCamera();
-        //遗传预览窗口
-        removePreviewWindow();
 
         //停止推流
         if (mLivePusher != null) {
@@ -324,14 +343,19 @@ public class OTGService extends Service implements ITXLivePushListener {
             mLivePusher.stopPusher();
         }
 
-        //清除设置的暂停推流的图片（即播放器看到的图片）
+        //清除设置的暂停推流的图片（即收看端看到的图片）
         if (mLivePushConfig != null) {
             mLivePushConfig.setPauseImg(null);
         }
     }
 
-    public synchronized boolean releaseCamera() {
-        Log.d(TAG, "releaseCamera");
+    /**
+     * 停止预览，释放相机
+     *
+     * @return
+     */
+    public synchronized boolean stopPreviewAndReleaseCamera() {
+        Log.d(TAG, "stopPreviewAndReleaseCamera");
 
         //先关闭预览，释放UVCCamera
         if (mUVCCamera != null) {
@@ -347,31 +371,34 @@ public class OTGService extends Service implements ITXLivePushListener {
             mPreviewSurface = null;
         }
 
-        //关闭usb口
+        //关闭usb监听
         if (mUSBMonitor != null) {
             mUSBMonitor.unregister();
             mUSBMonitor.destroy();
         }
 
+        //调用波导给的方法关闭usb摄像头，防止影响usb的其他功能，如usb调试
         mBirdIntelligentVehicle.BirdCloseOtg(getApplicationContext());
         return true;
     }
 
+    /**
+     * 移除预览窗口
+     */
     private void removePreviewWindow() {
         Log.d(TAG, "removePreviewWindow");
+
+        //先释放Surface
         if (mPreviewSurface != null) {
             Log.d(TAG, "release PreviewSurface");
             mPreviewSurface.release();
             mPreviewSurface = null;
         }
 
+        //移除View
         if (mPreviewContainer != null) {
             Log.d(TAG, "remove container");
             mWindowManager.removeView(mPreviewContainer);
-//            if (mPreviewSurface != null) {
-//                mPreviewSurface.release();
-//                mPreviewSurface = null;
-//            }
             mUVCCameraView = null;
             mPreviewContainer = null;
         }
